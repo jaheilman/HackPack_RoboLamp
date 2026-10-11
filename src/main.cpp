@@ -484,6 +484,7 @@ void restoreServoPosition(float duration, InterpolationMode mode);              
 void moveServosToTarget();                                                                                      // Moves servos towards target positions
 float applyEasing(float t, InterpolationMode mode);                                                             // Applies easing function based on interpolation mode
 void cancelMoodMotion();                                                                                        // Cancels any ongoing mood-driven motion
+void cancelCurrentMotion();                                                                                     // Releases the current animation or interpolation owner
 void completeServoMotion();                                                                                     // Completes any ongoing servo motion immediately
 inline void clampHeadToDistractedBounds(int16_t &yaw, int16_t &pitch);                                          // Clamps head angles to distracted mood bounds
 inline void clampHeadToDistractedBounds() { clampHeadToDistractedBounds(originalHeadYaw, originalHeadPitch); }  // Overload for current distracted bounds
@@ -580,6 +581,7 @@ void updateSmileyIfActive();          // Updates smiley face if active
 
 // ANIMATIONS
 void loadStartupAnimation();                                             // Loads and starts the startup animation
+void stopKeyframePlayback();                                              // Stops the current animation before another state takes control
 void playKeyframeAnimation();                                            // Plays the loaded keyframe animation
 void handleSmileyDuringStartup();                                        // Handles smiley face during startup animation
 void finishKeyframePlayback();                                           // Finishes keyframe playback
@@ -1591,6 +1593,13 @@ void cancelMoodMotion()
   interpolationStartTime = 0;
 }
 
+void cancelCurrentMotion()
+{
+  stopKeyframePlayback();
+  cancelMoodMotion();
+  presetActive = false;
+}
+
 float applyEasing(float t, InterpolationMode mode) // t ranges from 0.0 to 1.0
 
 {
@@ -1829,6 +1838,7 @@ void attachColorSelectionHandler()
 
     if (!colorSelectionMode)
     {
+      cancelCurrentMotion();
       // Enter color selection mode
       turnOffAllLights();
 
@@ -2201,6 +2211,7 @@ void applyPreset(uint8_t presetIndex)
 
 void initializePresetState()
 {
+  cancelCurrentMotion();
   smileyDisabledAfterUserInput = true;
   wanderingAfterStartup = false;
   isWandering = false;
@@ -2334,6 +2345,8 @@ void syncGlobalsFromPreset(uint8_t presetIndex)
 
 void setMoodDistracted(bool confirmationBlinkActive)
 {
+  bool comingFromStartupSmiley = (wanderingAfterStartup && !userHasTakenControl && Config::useSmiley && !smileyDisabledAfterUserInput);
+  cancelCurrentMotion();
   currentMood = MOOD_DISTRACTED;
   userHasTakenControl = true;
 
@@ -2342,7 +2355,6 @@ void setMoodDistracted(bool confirmationBlinkActive)
     Serial.println(F(">>> setMoodDistracted() CALLED"));
   }
 
-  bool comingFromStartupSmiley = (wanderingAfterStartup && !userHasTakenControl && Config::useSmiley && !smileyDisabledAfterUserInput);
   captureOriginalLightState();
   wanderingAfterStartup = false;
   if (!originalUseColoredLight && !comingFromStartupSmiley) // Don't disable the smiley unless light was explicitly chosen
@@ -2589,12 +2601,12 @@ void maybeTriggerExcitedAnimation(unsigned long now)
 
 void setMoodMoody(bool confirmationBlinkActive)
 {
+  cancelCurrentMotion();
   currentMood = MOOD_MOODY;
   userHasTakenControl = true;
 
   // Cancel startup idle state and smiley
   wanderingAfterStartup = false;
-  cancelMoodMotion();
   smileyDisabledAfterUserInput = true;
 
   hasRestoredMoodyOnce = false;
@@ -2789,16 +2801,15 @@ void handleMoodyNodCycle(unsigned long now)
 
 void setMoodFocused(bool confirmationBlinkActive)
 {
+  bool comingFromStartupSmiley = (wanderingAfterStartup && !userHasTakenControl && Config::useSmiley && !smileyDisabledAfterUserInput);
+  cancelCurrentMotion();
   currentMood = MOOD_FOCUSED;
   userSelectedMood = true;
   userHasTakenControl = true;
 
-  bool comingFromStartupSmiley = (wanderingAfterStartup && !userHasTakenControl && Config::useSmiley && !smileyDisabledAfterUserInput);
-
   captureOriginalLightState();
 
   wanderingAfterStartup = false;
-
   if (!originalUseColoredLight && !comingFromStartupSmiley) // Don't disable the smiley unless light was explicitly chosen
 
   {
@@ -3222,6 +3233,14 @@ void finishKeyframePlayback()
   }
 }
 
+void stopKeyframePlayback()
+{
+  isKeyframePlaybackActive = false;
+  activeKeyframeCount = 0;
+  currentKeyframeIndex = 0;
+  eyesSuppressed = false;
+}
+
 void updateCurrentKeyframeAnimation()
 {
   Keyframe &kf = activeKeyframes[currentKeyframeIndex];
@@ -3285,10 +3304,11 @@ void defineExcitedAnimations()
 
 void loadExcitedAnimation(uint8_t index)
 {
-  currentAnimationType = ANIM_EXCITED;
-
-  if (index >= 3)
+  if (index >= 2)
     return;
+
+  cancelCurrentMotion();
+  currentAnimationType = ANIM_EXCITED;
 
   bool smileyShouldBeShown = // Check if smiley should be shown
       Config::useSmiley &&
