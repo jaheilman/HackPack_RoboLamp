@@ -225,6 +225,16 @@ struct LampPreset
 };
 LampPreset presets[4]; // Array to store 4 presets
 
+struct SavedLightingSelection
+{
+  uint16_t signature;
+  uint8_t logicalIndex;
+  uint8_t brightnessIndex;
+  uint8_t useColoredLight;
+  uint16_t hue;
+  uint8_t whiteMode;
+};
+
 #pragma endregion Button Presets
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -429,6 +439,8 @@ MoodState currentMood = MOOD_FOCUSED; // Start in default "focused" mood
 
 const uint16_t EEPROM_MAGIC_ADDR = 100; // Address to store magic byte
 const byte EEPROM_MAGIC = 0xA5;         // Magic byte to verify EEPROM validity
+const uint16_t EEPROM_LIGHTING_ADDR = 110;
+const uint16_t EEPROM_LIGHTING_SIGNATURE = 0xC35A;
 
 #pragma endregion EEPROM
 
@@ -497,6 +509,8 @@ void moveToHeight(int16_t targetHeight);          // Moves lamp to target height
 // EEPROM
 void savePresetsToEEPROM();   // Saves current presets to EEPROM
 bool loadPresetsFromEEPROM(); // Loads presets from EEPROM
+void saveLightingSelectionToEEPROM();
+void restoreLightingSelectionFromEEPROM();
 
 // MOODS - Setters
 void setMoodDistracted(bool confirmationBlinkActive = false); // Sets the lamp to distracted mood
@@ -632,6 +646,7 @@ void setup()
   initializeHeightEncoder();
   initializeButtons();
   initializeEEPROM();
+  restoreLightingSelectionFromEEPROM();
   calibrateJoystick();
   initializeInterpolationDefaults();
   defineExcitedAnimations();
@@ -1924,6 +1939,13 @@ void attachColorSelectionHandler()
 
       selectedPixel = logicalSelectedIndex;
       colorSelectionMode = false;
+      saveLightingSelectionToEEPROM();
+
+      if (Config::useSmiley)
+      {
+        smileyDisabledAfterUserInput = false;
+        drawSmileyFace();
+      }
 
       lastUserInputTime = millis();
       lastJoystickMotionTime = millis();
@@ -3067,6 +3089,55 @@ void savePresetsToEEPROM()
   EEPROM.write(EEPROM_MAGIC_ADDR, EEPROM_MAGIC);
 }
 
+void saveLightingSelectionToEEPROM()
+{
+  SavedLightingSelection saved = {};
+  saved.signature = EEPROM_LIGHTING_SIGNATURE;
+  saved.logicalIndex = logicalSelectedIndex;
+  saved.brightnessIndex = currentBrightnessIndex;
+  saved.useColoredLight = useColoredLight;
+  saved.hue = hue;
+  saved.whiteMode = currentWhiteMode;
+  EEPROM.put(EEPROM_LIGHTING_ADDR, saved);
+}
+
+void restoreLightingSelectionFromEEPROM()
+{
+  SavedLightingSelection saved;
+  EEPROM.get(EEPROM_LIGHTING_ADDR, saved);
+
+  if (saved.signature != EEPROM_LIGHTING_SIGNATURE ||
+      saved.logicalIndex >= numPixels ||
+      saved.brightnessIndex >= brightnessLevelCount ||
+      saved.useColoredLight > 1 ||
+      saved.whiteMode < WHITE_WARM || saved.whiteMode > WHITE_COOL ||
+      (saved.useColoredLight && saved.logicalIndex >= 9) ||
+      (!saved.useColoredLight && saved.logicalIndex < 9))
+  {
+    return;
+  }
+
+  logicalSelectedIndex = saved.logicalIndex;
+  selectedPixel = saved.logicalIndex;
+  currentBrightnessIndex = saved.brightnessIndex;
+  useColoredLight = saved.useColoredLight;
+  hue = saved.hue;
+  currentWhiteMode = static_cast<WhiteMode>(saved.whiteMode);
+  originalUseColoredLight = useColoredLight;
+  originalBrightness = getCurrentBrightness();
+  originalHue = useColoredLight ? hue : 0;
+
+  if (useColoredLight)
+  {
+    applyColorLighting(hue, getCurrentBrightness());
+  }
+  else
+  {
+    setNeopixelColor(0, 0, true);
+    setWhiteLightMode(currentWhiteMode, getCurrentBrightness(), false);
+  }
+}
+
 bool loadPresetsFromEEPROM()
 {
   if (EEPROM.read(EEPROM_MAGIC_ADDR) != EEPROM_MAGIC)
@@ -3541,6 +3612,7 @@ void finishStartupWithoutAnimation()
       syncGlobalsFromPreset(0);
       applyStartupLightingFromConfig();
       updateCurrentBrightnessIndex(presets[0].brightness);
+      restoreLightingSelectionFromEEPROM();
 
       // With no smiley feature, this should remain true.
       smileyDisabledAfterUserInput = true;
